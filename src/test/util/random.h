@@ -9,15 +9,27 @@
 #include <random.h>
 #include <uint256.h>
 
+#include <atomic>
 #include <cstdint>
 
 enum class SeedRand {
-    ZEROS, //!< Seed with a compile time constant of zeros
-    SEED,  //!< Use (and report) random seed from environment, or a (truly) random one.
+    /**
+     * Seed with a compile time constant of zeros.
+     */
+    ZEROS,
+    /**
+     * Seed with a fixed value that never changes over the lifetime of this
+     * process. The seed is read from the RANDOM_CTX_SEED environment variable
+     * if set, otherwise generated randomly once, saved, and reused.
+     */
+    FIXED_SEED,
 };
 
 /** Seed the global RNG state for testing and log the seed value. This affects all randomness, except GetStrongRandBytes(). */
 void SeedRandomStateForTest(SeedRand seed);
+
+extern std::atomic<bool> g_seeded_g_prng_zero;
+extern std::atomic<bool> g_used_g_prng;
 
 template <RandomNumberGenerator Rng>
 inline CAmount RandMoney(Rng&& rng)

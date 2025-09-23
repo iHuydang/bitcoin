@@ -2,6 +2,8 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or https://opensource.org/license/mit/.
 
+include(GNUInstallDirs)
+
 # TODO: libbitcoinkernel is a work in progress consensus engine
 #       library, as more and more modules are decoupled from the
 #       consensus engine, this list will shrink to only those
@@ -33,6 +35,7 @@ add_library(bitcoinkernel
   ../node/blockstorage.cpp
   ../node/chainstate.cpp
   ../node/utxo_snapshot.cpp
+  ../policy/ephemeral_policy.cpp
   ../policy/feerate.cpp
   ../policy/packages.cpp
   ../policy/policy.cpp
@@ -76,17 +79,22 @@ add_library(bitcoinkernel
   ../validation.cpp
   ../validationinterface.cpp
   ../versionbits.cpp
+  $<TARGET_OBJECTS:bitcoin_clientversion>
+  $<TARGET_OBJECTS:bitcoin_crypto>
+  $<TARGET_OBJECTS:leveldb>
+  $<TARGET_OBJECTS:crc32c>
 )
 target_link_libraries(bitcoinkernel
   PRIVATE
     core_interface
-    bitcoin_clientversion
-    bitcoin_crypto
-    leveldb
-    secp256k1
+    secp256k1_objs
+    $<$<PLATFORM_ID:Windows>:bcrypt>
+    $<TARGET_NAME_IF_EXISTS:USDT::headers>
   PUBLIC
     Boost::headers
 )
+
+target_include_directories(bitcoinkernel PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/leveldb/include>)
 
 # libbitcoinkernel requires default symbol visibility, explicitly
 # specify that here so that things still work even when user
@@ -98,9 +106,21 @@ set_target_properties(bitcoinkernel PROPERTIES
   CXX_VISIBILITY_PRESET default
 )
 
-include(GNUInstallDirs)
+# Add a convenience libbitcoinkernel target as a synonym for bitcoinkernel.
+add_custom_target(libbitcoinkernel)
+add_dependencies(libbitcoinkernel bitcoinkernel)
+
+configure_file(${PROJECT_SOURCE_DIR}/libbitcoinkernel.pc.in ${PROJECT_BINARY_DIR}/libbitcoinkernel.pc @ONLY)
+install(FILES ${PROJECT_BINARY_DIR}/libbitcoinkernel.pc DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig" COMPONENT libbitcoinkernel)
+
 install(TARGETS bitcoinkernel
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT libbitcoinkernel
+  LIBRARY
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT libbitcoinkernel
+  ARCHIVE
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT libbitcoinkernel
 )

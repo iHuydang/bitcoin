@@ -2,28 +2,49 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or https://opensource.org/license/mit/.
 
-include(GNUInstallDirs)
 include(AddWindowsResources)
 
-configure_file(${PROJECT_SOURCE_DIR}/cmake/bitcoin-config.h.in config/bitcoin-config.h @ONLY)
+configure_file(${PROJECT_SOURCE_DIR}/cmake/bitcoin-build-config.h.in bitcoin-build-config.h USE_SOURCE_PERMISSIONS @ONLY)
 include_directories(${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
 
-# TODO: After the transition from Autotools to CMake, the obj/ subdirectory
-#       could be dropped as its only purpose was to separate a generated header
-#       from source files.
+#=============================
+# Subprojects
+#=============================
+# Subprojects include subdirectories that do or could have tests
+# and/or benchmark binaries, such as all subtrees and univalue.
+# These need to be included before CMAKE_*_OUTPUT_DIRECTORY variables
+# are set, so output locations of subproject tests and libraries are
+# not overridden.
+include(../cmake/crc32c.cmake)
+include(../cmake/leveldb.cmake)
+include(../cmake/minisketch.cmake)
+add_subdirectory(univalue)
+if (ENABLE_IPC AND NOT WITH_EXTERNAL_LIBMULTIPROCESS)
+  include(../cmake/libmultiprocess.cmake)
+  add_libmultiprocess(ipc/libmultiprocess)
+endif()
+include(../cmake/secp256k1.cmake)
+add_secp256k1(secp256k1)
+
+# Set top-level target output locations.
+if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+  set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
+endif()
+if(NOT CMAKE_LIBRARY_OUTPUT_DIRECTORY)
+  set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
+endif()
+if(NOT CMAKE_ARCHIVE_OUTPUT_DIRECTORY)
+  set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/lib)
+endif()
+
 add_custom_target(generate_build_info
-  BYPRODUCTS ${PROJECT_BINARY_DIR}/src/obj/build.h
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJECT_BINARY_DIR}/src/obj
-  COMMAND ${CMAKE_COMMAND} -DBUILD_INFO_HEADER_PATH=${PROJECT_BINARY_DIR}/src/obj/build.h -DSOURCE_DIR=${PROJECT_SOURCE_DIR} -P ${PROJECT_SOURCE_DIR}/cmake/script/GenerateBuildInfo.cmake
-  COMMENT "Generating obj/build.h"
+  BYPRODUCTS ${PROJECT_BINARY_DIR}/src/bitcoin-build-info.h
+  COMMAND ${CMAKE_COMMAND} -DBUILD_INFO_HEADER_PATH=${PROJECT_BINARY_DIR}/src/bitcoin-build-info.h -DSOURCE_DIR=${PROJECT_SOURCE_DIR} -P ${PROJECT_SOURCE_DIR}/cmake/script/GenerateBuildInfo.cmake
+  COMMENT "Generating bitcoin-build-info.h"
   VERBATIM
 )
-add_library(bitcoin_clientversion OBJECT EXCLUDE_FROM_ALL
+add_library(bitcoin_clientversion STATIC EXCLUDE_FROM_ALL
   clientversion.cpp
-)
-target_compile_definitions(bitcoin_clientversion
-  PRIVATE
-    HAVE_BUILD_INFO
 )
 target_link_libraries(bitcoin_clientversion
   PRIVATE
@@ -32,50 +53,11 @@ target_link_libraries(bitcoin_clientversion
 add_dependencies(bitcoin_clientversion generate_build_info)
 
 add_subdirectory(crypto)
-add_subdirectory(univalue)
 add_subdirectory(util)
-if(WITH_MULTIPROCESS)
+if(ENABLE_IPC)
   add_subdirectory(ipc)
 endif()
 
-#=============================
-# secp256k1 subtree
-#=============================
-message("")
-message("Configuring secp256k1 subtree...")
-set(SECP256K1_DISABLE_SHARED ON CACHE BOOL "" FORCE)
-set(SECP256K1_ENABLE_MODULE_ECDH OFF CACHE BOOL "" FORCE)
-set(SECP256K1_ENABLE_MODULE_RECOVERY ON CACHE BOOL "" FORCE)
-set(SECP256K1_BUILD_BENCHMARK OFF CACHE BOOL "" FORCE)
-set(SECP256K1_BUILD_TESTS ${BUILD_TESTS} CACHE BOOL "" FORCE)
-set(SECP256K1_BUILD_EXHAUSTIVE_TESTS ${BUILD_TESTS} CACHE BOOL "" FORCE)
-set(SECP256K1_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-include(GetTargetInterface)
-# -fsanitize and related flags apply to both C++ and C,
-# so we can pass them down to libsecp256k1 as CFLAGS.
-get_target_interface(core_sanitizer_cxx_flags "" sanitize_interface COMPILE_OPTIONS)
-set(SECP256K1_LATE_CFLAGS ${core_sanitizer_cxx_flags} CACHE STRING "" FORCE)
-unset(core_sanitizer_cxx_flags)
-# We want to build libsecp256k1 with the most tested RelWithDebInfo configuration.
-enable_language(C)
-foreach(config IN LISTS CMAKE_BUILD_TYPE CMAKE_CONFIGURATION_TYPES)
-  if(config STREQUAL "")
-    continue()
-  endif()
-  string(TOUPPER "${config}" config)
-  set(CMAKE_C_FLAGS_${config} "${CMAKE_C_FLAGS_RELWITHDEBINFO}")
-endforeach()
-# If the CFLAGS environment variable is defined during building depends
-# and configuring this build system, its content might be duplicated.
-if(DEFINED ENV{CFLAGS})
-  deduplicate_flags(CMAKE_C_FLAGS)
-endif()
-set(CMAKE_EXPORT_COMPILE_COMMANDS OFF)
-add_subdirectory(secp256k1)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-string(APPEND CMAKE_C_COMPILE_OBJECT " ${APPEND_CPPFLAGS} ${APPEND_CFLAGS}")
-
-# Stable, backwards-compatible consensus functionality.
 add_library(bitcoin_consensus STATIC EXCLUDE_FROM_ALL
   arith_uint256.cpp
   consensus/merkle.cpp
@@ -106,6 +88,7 @@ add_library(bitcoin_common STATIC EXCLUDE_FROM_ALL
   addresstype.cpp
   base58.cpp
   bech32.cpp
+  chain.cpp
   chainparams.cpp
   chainparamsbase.cpp
   coins.cpp
@@ -115,6 +98,8 @@ add_library(bitcoin_common STATIC EXCLUDE_FROM_ALL
   common/init.cpp
   common/interfaces.cpp
   common/messages.cpp
+  common/netif.cpp
+  common/pcp.cpp
   common/run_command.cpp
   common/settings.cpp
   common/signmessage.cpp
@@ -130,6 +115,7 @@ add_library(bitcoin_common STATIC EXCLUDE_FROM_ALL
   key.cpp
   key_io.cpp
   merkleblock.cpp
+  musig.cpp
   net_permissions.cpp
   net_types.cpp
   netaddress.cpp
@@ -137,9 +123,9 @@ add_library(bitcoin_common STATIC EXCLUDE_FROM_ALL
   outputtype.cpp
   policy/feerate.cpp
   policy/policy.cpp
+  pow.cpp
   protocol.cpp
   psbt.cpp
-  rpc/external_signer.cpp
   rpc/rawtransaction_util.cpp
   rpc/request.cpp
   rpc/util.cpp
@@ -163,8 +149,8 @@ target_link_libraries(bitcoin_common
     $<$<PLATFORM_ID:Windows>:ws2_32>
 )
 
+include(InstallBinaryComponent)
 
-set(installable_targets)
 if(ENABLE_WALLET)
   add_subdirectory(wallet)
 
@@ -175,6 +161,7 @@ if(ENABLE_WALLET)
       wallet/wallettool.cpp
     )
     add_windows_resources(bitcoin-wallet bitcoin-wallet-res.rc)
+    add_windows_application_manifest(bitcoin-wallet)
     target_link_libraries(bitcoin-wallet
       core_interface
       bitcoin_wallet
@@ -182,7 +169,7 @@ if(ENABLE_WALLET)
       bitcoin_util
       Boost::headers
     )
-    list(APPEND installable_targets bitcoin-wallet)
+    install_binary_component(bitcoin-wallet HAS_MANPAGE)
   endif()
 endif()
 
@@ -195,7 +182,6 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   bip324.cpp
   blockencodings.cpp
   blockfilter.cpp
-  chain.cpp
   consensus/tx_verify.cpp
   dbwrapper.cpp
   deploymentstatus.cpp
@@ -245,19 +231,22 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   node/psbt.cpp
   node/timeoffsets.cpp
   node/transaction.cpp
+  node/txdownloadman_impl.cpp
+  node/txorphanage.cpp
   node/txreconciliation.cpp
   node/utxo_snapshot.cpp
   node/warnings.cpp
   noui.cpp
+  policy/ephemeral_policy.cpp
   policy/fees.cpp
   policy/fees_args.cpp
   policy/packages.cpp
   policy/rbf.cpp
   policy/settings.cpp
   policy/truc_policy.cpp
-  pow.cpp
   rest.cpp
   rpc/blockchain.cpp
+  rpc/external_signer.cpp
   rpc/fees.cpp
   rpc/mempool.cpp
   rpc/mining.cpp
@@ -273,8 +262,8 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   signet.cpp
   torcontrol.cpp
   txdb.cpp
+  txgraph.cpp
   txmempool.cpp
-  txorphanage.cpp
   txrequest.cpp
   validation.cpp
   validationinterface.cpp
@@ -287,18 +276,25 @@ target_link_libraries(bitcoin_node
     core_interface
     bitcoin_common
     bitcoin_util
+    $<TARGET_NAME_IF_EXISTS:bitcoin_zmq>
     leveldb
     minisketch
     univalue
     Boost::headers
-    $<TARGET_NAME_IF_EXISTS:libevent::libevent>
+    $<TARGET_NAME_IF_EXISTS:libevent::core>
+    $<TARGET_NAME_IF_EXISTS:libevent::extra>
     $<TARGET_NAME_IF_EXISTS:libevent::pthreads>
-    $<TARGET_NAME_IF_EXISTS:NATPMP::NATPMP>
-    $<TARGET_NAME_IF_EXISTS:MiniUPnPc::MiniUPnPc>
-    $<TARGET_NAME_IF_EXISTS:bitcoin_zmq>
     $<TARGET_NAME_IF_EXISTS:USDT::headers>
 )
 
+# Bitcoin wrapper executable that can call other executables.
+if(BUILD_BITCOIN_BIN)
+  add_executable(bitcoin bitcoin.cpp)
+  add_windows_resources(bitcoin bitcoin-res.rc)
+  add_windows_application_manifest(bitcoin)
+  target_link_libraries(bitcoin core_interface bitcoin_util)
+  install_binary_component(bitcoin HAS_MANPAGE)
+endif()
 
 # Bitcoin Core bitcoind.
 if(BUILD_DAEMON)
@@ -307,14 +303,15 @@ if(BUILD_DAEMON)
     init/bitcoind.cpp
   )
   add_windows_resources(bitcoind bitcoind-res.rc)
+  add_windows_application_manifest(bitcoind)
   target_link_libraries(bitcoind
     core_interface
     bitcoin_node
     $<TARGET_NAME_IF_EXISTS:bitcoin_wallet>
   )
-  list(APPEND installable_targets bitcoind)
+  install_binary_component(bitcoind HAS_MANPAGE)
 endif()
-if(WITH_MULTIPROCESS)
+if(ENABLE_IPC AND BUILD_DAEMON)
   add_executable(bitcoin-node
     bitcoind.cpp
     init/bitcoin-node.cpp
@@ -325,7 +322,23 @@ if(WITH_MULTIPROCESS)
     bitcoin_ipc
     $<TARGET_NAME_IF_EXISTS:bitcoin_wallet>
   )
-  list(APPEND installable_targets bitcoin-node)
+  install_binary_component(bitcoin-node INTERNAL)
+endif()
+
+if(ENABLE_IPC AND BUILD_TESTS)
+    # bitcoin_ipc_test library target is defined here in src/CMakeLists.txt
+    # instead of src/test/CMakeLists.txt so capnp files in src/test/ are able to
+    # reference capnp files in src/ipc/capnp/ by relative path. The Cap'n Proto
+    # compiler only allows importing by relative path when the importing and
+    # imported files are underneath the same compilation source prefix, so the
+    # source prefix must be src/, not src/test/
+    add_library(bitcoin_ipc_test STATIC EXCLUDE_FROM_ALL
+      test/ipc_test.cpp
+    )
+    target_capnp_sources(bitcoin_ipc_test ${PROJECT_SOURCE_DIR}
+      test/ipc_test.capnp
+    )
+    add_dependencies(bitcoin_ipc_test bitcoin_ipc_headers)
 endif()
 
 
@@ -344,39 +357,43 @@ target_link_libraries(bitcoin_cli
 if(BUILD_CLI)
   add_executable(bitcoin-cli bitcoin-cli.cpp)
   add_windows_resources(bitcoin-cli bitcoin-cli-res.rc)
+  add_windows_application_manifest(bitcoin-cli)
   target_link_libraries(bitcoin-cli
     core_interface
     bitcoin_cli
     bitcoin_common
     bitcoin_util
-    $<TARGET_NAME_IF_EXISTS:libevent::libevent>
+    libevent::core
+    libevent::extra
   )
-  list(APPEND installable_targets bitcoin-cli)
+  install_binary_component(bitcoin-cli HAS_MANPAGE)
 endif()
 
 
 if(BUILD_TX)
   add_executable(bitcoin-tx bitcoin-tx.cpp)
   add_windows_resources(bitcoin-tx bitcoin-tx-res.rc)
+  add_windows_application_manifest(bitcoin-tx)
   target_link_libraries(bitcoin-tx
     core_interface
     bitcoin_common
     bitcoin_util
     univalue
   )
-  list(APPEND installable_targets bitcoin-tx)
+  install_binary_component(bitcoin-tx HAS_MANPAGE)
 endif()
 
 
 if(BUILD_UTIL)
   add_executable(bitcoin-util bitcoin-util.cpp)
   add_windows_resources(bitcoin-util bitcoin-util-res.rc)
+  add_windows_application_manifest(bitcoin-util)
   target_link_libraries(bitcoin-util
     core_interface
     bitcoin_common
     bitcoin_util
   )
-  list(APPEND installable_targets bitcoin-util)
+  install_binary_component(bitcoin-util HAS_MANPAGE)
 endif()
 
 
@@ -407,6 +424,7 @@ if(BUILD_UTIL_CHAINSTATE)
       core_interface
       bitcoinkernel
   )
+  install_binary_component(bitcoin-chainstate INTERNAL)
 endif()
 
 
@@ -421,18 +439,4 @@ endif()
 
 if(BUILD_FUZZ_BINARY)
   add_subdirectory(test/fuzz)
-endif()
-
-
-install(TARGETS ${installable_targets}
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
-unset(installable_targets)
-
-if(INSTALL_MAN)
-  # TODO: these stubs are no longer needed. man pages should be generated at install time.
-  install(DIRECTORY ../doc/man/
-    DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
-    FILES_MATCHING PATTERN *.1
-  )
 endif()

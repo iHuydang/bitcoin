@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2022 The Bitcoin Core developers
+// Copyright (c) 2019-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -72,7 +72,7 @@ FUZZ_TARGET(p2p_transport_serialization, .init = initialize_p2p_transport_serial
     }
 
     mutable_msg_bytes.insert(mutable_msg_bytes.end(), payload_bytes.begin(), payload_bytes.end());
-    Span<const uint8_t> msg_bytes{mutable_msg_bytes};
+    std::span<const uint8_t> msg_bytes{mutable_msg_bytes};
     while (msg_bytes.size() > 0) {
         if (!recv_transport.ReceivedBytes(msg_bytes)) {
             break;
@@ -81,13 +81,13 @@ FUZZ_TARGET(p2p_transport_serialization, .init = initialize_p2p_transport_serial
             const std::chrono::microseconds m_time{std::numeric_limits<int64_t>::max()};
             bool reject_message{false};
             CNetMessage msg = recv_transport.GetReceivedMessage(m_time, reject_message);
-            assert(msg.m_type.size() <= CMessageHeader::COMMAND_SIZE);
+            assert(msg.m_type.size() <= CMessageHeader::MESSAGE_TYPE_SIZE);
             assert(msg.m_raw_message_size <= mutable_msg_bytes.size());
             assert(msg.m_raw_message_size == CMessageHeader::HEADER_SIZE + msg.m_message_size);
             assert(msg.m_time == m_time);
 
             std::vector<unsigned char> header;
-            auto msg2 = NetMsg::Make(msg.m_type, Span{msg.m_recv});
+            auto msg2 = NetMsg::Make(msg.m_type, std::span{msg.m_recv});
             bool queued = send_transport.SetMessageToSend(msg2);
             assert(queued);
             std::optional<bool> known_more;
@@ -139,9 +139,9 @@ void SimulationTest(Transport& initiator, Transport& responder, R& rng, FuzzedDa
             // If v is 0xFF, construct a valid (but possibly unknown) message type from the fuzz
             // data.
             std::string ret;
-            while (ret.size() < CMessageHeader::COMMAND_SIZE) {
+            while (ret.size() < CMessageHeader::MESSAGE_TYPE_SIZE) {
                 char c = provider.ConsumeIntegral<char>();
-                // Match the allowed characters in CMessageHeader::IsCommandValid(). Any other
+                // Match the allowed characters in CMessageHeader::IsMessageTypeValid(). Any other
                 // character is interpreted as end.
                 if (c < ' ' || c > 0x7E) break;
                 ret += c;
@@ -191,7 +191,7 @@ void SimulationTest(Transport& initiator, Transport& responder, R& rng, FuzzedDa
         if (more_nonext) assert(more_next);
         // Compare with previously reported output.
         assert(to_send[side].size() <= bytes.size());
-        assert(std::ranges::equal(to_send[side], Span{bytes}.first(to_send[side].size())));
+        assert(std::ranges::equal(to_send[side], std::span{bytes}.first(to_send[side].size())));
         to_send[side].resize(bytes.size());
         std::copy(bytes.begin(), bytes.end(), to_send[side].begin());
         // Remember 'more' results.
@@ -252,7 +252,7 @@ void SimulationTest(Transport& initiator, Transport& responder, R& rng, FuzzedDa
         // Decide span to receive
         size_t to_recv_len = in_flight[side].size();
         if (!everything) to_recv_len = provider.ConsumeIntegralInRange<size_t>(0, to_recv_len);
-        Span<const uint8_t> to_recv = Span{in_flight[side]}.first(to_recv_len);
+        std::span<const uint8_t> to_recv = std::span{in_flight[side]}.first(to_recv_len);
         // Process those bytes
         while (!to_recv.empty()) {
             size_t old_len = to_recv.size();

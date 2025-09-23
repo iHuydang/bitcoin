@@ -20,9 +20,9 @@ In configuration output, this function prints a string by the following pattern:
 function(try_append_linker_flag flag)
   cmake_parse_arguments(PARSE_ARGV 1
     TALF                              # prefix
-    ""                                # options
+    "NO_CACHE_IF_FAILED"              # options
     "TARGET;VAR;SOURCE;RESULT_VAR"    # one_value_keywords
-    "IF_CHECK_PASSED;IF_CHECK_FAILED" # multi_value_keywords
+    "IF_CHECK_PASSED"                 # multi_value_keywords
   )
 
   string(MAKE_C_IDENTIFIER "${flag}" result)
@@ -48,7 +48,8 @@ function(try_append_linker_flag flag)
         target_link_options(${TALF_TARGET} INTERFACE ${TALF_IF_CHECK_PASSED})
       endif()
       if(DEFINED TALF_VAR)
-        string(STRIP "${${TALF_VAR}} ${TALF_IF_CHECK_PASSED}" ${TALF_VAR})
+        list(JOIN TALF_IF_CHECK_PASSED " " flags_if_check_passed_as_string)
+        string(STRIP "${${TALF_VAR}} ${flags_if_check_passed_as_string}" ${TALF_VAR})
       endif()
     else()
       if(DEFINED TALF_TARGET)
@@ -58,13 +59,6 @@ function(try_append_linker_flag flag)
         string(STRIP "${${TALF_VAR}} ${flag}" ${TALF_VAR})
       endif()
     endif()
-  elseif(DEFINED TALF_IF_CHECK_FAILED)
-    if(DEFINED TALF_TARGET)
-      target_link_options(${TALF_TARGET} INTERFACE ${TACXXF_IF_CHECK_FAILED})
-    endif()
-    if(DEFINED TALF_VAR)
-      string(STRIP "${${TALF_VAR}} ${TACXXF_IF_CHECK_FAILED}" ${TALF_VAR})
-    endif()
   endif()
 
   if(DEFINED TALF_VAR)
@@ -73,6 +67,10 @@ function(try_append_linker_flag flag)
 
   if(DEFINED TALF_RESULT_VAR)
     set(${TALF_RESULT_VAR} "${${result}}" PARENT_SCOPE)
+  endif()
+
+  if(NOT ${result} AND TALF_NO_CACHE_IF_FAILED)
+    unset(${result} CACHE)
   endif()
 endfunction()
 

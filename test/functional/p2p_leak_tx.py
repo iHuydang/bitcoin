@@ -12,6 +12,7 @@ from test_framework.util import (
 )
 from test_framework.wallet import MiniWallet
 
+import time
 
 class P2PNode(P2PDataStore):
     def on_inv(self, msg):
@@ -36,15 +37,31 @@ class P2PLeakTxTest(BitcoinTestFramework):
 
         self.log.debug("Generate transaction and block")
         inbound_peer.last_message.pop("inv", None)
+
+        self.gen_node.setmocktime(int(time.time())) # pause time based activities
         wtxid = self.miniwallet.send_self_transfer(from_node=self.gen_node)["wtxid"]
+        rawmp = self.gen_node.getrawmempool(False, True)
+        pi = self.gen_node.getpeerinfo()[0]
+        assert_equal(rawmp["mempool_sequence"], 2) # our tx cause mempool activity
+        assert_equal(pi["last_inv_sequence"], 1) # that is after the last inv
+        assert_equal(pi["inv_to_send"], 1) # and our tx has been queued
+        self.gen_node.setmocktime(0)
+
         inbound_peer.wait_until(lambda: "inv" in inbound_peer.last_message and inbound_peer.last_message.get("inv").inv[0].hash == int(wtxid, 16))
+
+        rawmp = self.gen_node.getrawmempool(False, True)
+        pi = self.gen_node.getpeerinfo()[0]
+        assert_equal(rawmp["mempool_sequence"], 2) # no mempool update
+        assert_equal(pi["last_inv_sequence"], 2) # announced the current mempool
+        assert_equal(pi["inv_to_send"], 0) # nothing left in the queue
+
         want_tx = msg_getdata(inv=inbound_peer.last_message.get("inv").inv)
         self.generate(self.gen_node, 1)
 
         self.log.debug("Request transaction")
         inbound_peer.last_message.pop("tx", None)
         inbound_peer.send_and_ping(want_tx)
-        assert_equal(inbound_peer.last_message.get("tx").tx.getwtxid(), wtxid)
+        assert_equal(inbound_peer.last_message.get("tx").tx.wtxid_hex, wtxid)
 
     def test_notfound_on_replaced_tx(self):
         self.gen_node.disconnect_p2ps()
@@ -57,7 +74,7 @@ class P2PLeakTxTest(BitcoinTestFramework):
         tx_b = tx_a["tx"]
         tx_b.vout[0].nValue -= 9000
         self.gen_node.sendrawtransaction(tx_b.serialize().hex())
-        inbound_peer.wait_until(lambda: "tx" in inbound_peer.last_message and inbound_peer.last_message.get("tx").tx.getwtxid() == tx_b.getwtxid())
+        inbound_peer.wait_until(lambda: "tx" in inbound_peer.last_message and inbound_peer.last_message.get("tx").tx.wtxid_hex == tx_b.wtxid_hex)
 
         self.log.info("Re-request of tx_a after replacement is answered with notfound")
         req_vec = [
